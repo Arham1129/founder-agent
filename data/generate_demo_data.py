@@ -5,7 +5,7 @@ from pathlib import Path
 OUT = Path(__file__).parent
 CASH_TODAY = 6_000_000
 AWS = {6: 180_000, 7:180_000, 8:180_000, 9:190_000, 10:250_000, 11:250_000}
-INFLOW = {6: 2_700_000, 7: 2_700_000, 8: 2_700_000, 9: 2_700_000, 10: 2_700_000}
+INFLOW = {6: 2_700_000, 7: 2_700_000, 8: 2_700_000, 9: 2_700_000, 10: 2_780_000}
 
 def build_transactions():
     tx = []
@@ -15,7 +15,7 @@ def build_transactions():
         if m <= 10:
             tx.append((date(2026, m, 10), "Operating Expenses", -520_000))
             tx.append((date(2026, m, 12), "Customer Payment -  Beta Retail", 600_000))
-            tx.append((date(2026, m, 20), "Customer Payment -  Gulf Mart",  INFLOW[m] - 400_000))
+            tx.append((date(2026, m, 20), "Customer Payment -  Gulf Mart",  INFLOW[m] - 600_000))
             tx.append((date(2026, m, 29), "Payroll", -3_100_000))
         else:
             tx.append((date(2026, 11, 12), "Customer Payment -  Beta Retail", 1_200_000))
