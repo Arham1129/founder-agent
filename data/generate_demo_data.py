@@ -10,15 +10,15 @@ INFLOW = {6: 2_700_000, 7: 2_700_000, 8: 2_700_000, 9: 2_700_000, 10: 2_700_000}
 def build_transactions():
     tx = []
     for m in range(6, 12):
-        tx.append((date(2025, m, 1), "Office Rent", -400_000))
-        tx.append((date(2025, m, 1), "AWS Cloud", -AWS[m]))
+        tx.append((date(2026, m, 1), "Office Rent", -400_000))
+        tx.append((date(2026, m, 1), "AWS Cloud", -AWS[m]))
         if m <= 10:
-            tx.append((date(2025, m, 10), "Operating Expenses", -520_000))
-            tx.append((date(2025, m, 12), "Customer Payment -  Beta Retail", 600_000))
-            tx.append((date(2025, m, 20), "Customer Payment -  Gulf Mart",  INFLOW[m] - 400_000))
-            tx.append((date(2025, m, 29), "Payroll", -3_100_000))
+            tx.append((date(2026, m, 10), "Operating Expenses", -520_000))
+            tx.append((date(2026, m, 12), "Customer Payment -  Beta Retail", 600_000))
+            tx.append((date(2026, m, 20), "Customer Payment -  Gulf Mart",  INFLOW[m] - 400_000))
+            tx.append((date(2026, m, 29), "Payroll", -3_100_000))
         else:
-            tx.append((date(2025, 11, 12), "Customer Payment -  Beta Retail", 1_200_000))
+            tx.append((date(2026, 11, 12), "Customer Payment -  Beta Retail", 1_200_000))
     return sorted(tx)
 
 def write_bank():
