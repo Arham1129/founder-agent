@@ -4,15 +4,15 @@ Rule of the project: CODE does all the math (see finance.py).
 The AI only explains the risks and drafts actions.
 The founder approves, edits or rejects every action in the UI.
 
-Expected `report` shape (built by finance.build_risk_report):
+This file accepts the report exactly as finance.build_risk_report() returns it:
 {
-  "cash": 42000.0,
-  "monthly_burn": 18000.0,
-  "runway_months": 2.3,
-  "overdue_invoices": [{"invoice_id": "", "customer": "", "amount": 0, "days_late": 0}],
-  "payroll_risk": {"next_pay_date": "", "amount": 0, "shortfall": 0},
-  "expense_spikes": [{"category": "", "increase_pct": 0}]
+  "runway": {"cash": ..., "burn": ..., "runway": ...},
+  "overdue_invoices": [{"invoice_id", "customer", "amount", "days_overdue", ...}],
+  "payroll_risk": {"has_upcoming_payroll", "pay_date", "payroll_amount",
+                   "cash_after_payroll", "risky"},
+  "expense_spikes": [{"description", "pct_increase", ...}]
 }
+It first converts that into a simpler "flat" report (see _normalize_report).
 """
 
 import json
@@ -38,12 +38,75 @@ def _money(value) -> str:
         return "n/a"
 
 
+def _date_text(value) -> str:
+    if value is None:
+        return "?"
+    if hasattr(value, "strftime"):
+        return value.strftime("%Y-%m-%d")
+    return str(value)
+
+
 def _runway_text(report: dict) -> str:
     runway = report.get("runway_months")
+    if runway is None:
+        return "no net cash burn (cash is not shrinking)"
     try:
         return f"{float(runway):.1f} months"
     except (TypeError, ValueError):
         return "n/a"
+
+
+def _normalize_report(report: dict) -> dict:
+    """Convert finance.py's report into a simple flat shape.
+
+    If the report is already flat, it is returned unchanged.
+    """
+    if not isinstance(report.get("runway"), dict):
+        return report
+
+    runway = report["runway"]
+
+    overdue = []
+    for inv in report.get("overdue_invoices") or []:
+        overdue.append(
+            {
+                "invoice_id": inv.get("invoice_id", ""),
+                "customer": inv.get("customer", ""),
+                "amount": inv.get("amount", 0),
+                "days_late": inv.get("days_overdue", inv.get("days_late", "?")),
+            }
+        )
+
+    payroll_in = report.get("payroll_risk") or {}
+    payroll = {}
+    if payroll_in.get("has_upcoming_payroll"):
+        after = payroll_in.get("cash_after_payroll")
+        shortfall = max(0.0, -float(after)) if after is not None else 0.0
+        payroll = {
+            "next_pay_date": _date_text(payroll_in.get("pay_date")),
+            "amount": payroll_in.get("payroll_amount"),
+            "cash_after_payroll": after,
+            "shortfall": shortfall,
+            "risky": bool(payroll_in.get("risky")),
+        }
+
+    spikes = []
+    for spike in report.get("expense_spikes") or []:
+        spikes.append(
+            {
+                "category": spike.get("description", spike.get("category", "")),
+                "increase_pct": spike.get("pct_increase", spike.get("increase_pct", 0)),
+            }
+        )
+
+    return {
+        "cash": runway.get("cash"),
+        "monthly_burn": runway.get("burn"),
+        "runway_months": runway.get("runway"),
+        "overdue_invoices": overdue,
+        "payroll_risk": payroll,
+        "expense_spikes": spikes,
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -122,16 +185,20 @@ def _fallback_actions(report: dict) -> list[dict]:
         )
 
     payroll = report.get("payroll_risk") or {}
-    if payroll.get("shortfall", 0) and payroll.get("shortfall", 0) > 0:
+    if payroll and (payroll.get("risky") or (payroll.get("shortfall") or 0) > 0):
         raw.append(
             {
-                "title": "Prepare for the next payroll shortfall",
+                "title": "Prepare for the next payroll",
                 "reason": (
                     f"Payroll of {_money(payroll.get('amount'))} is due on "
-                    f"{payroll.get('next_pay_date', 'the next pay date')} and cash is short by "
-                    f"{_money(payroll.get('shortfall'))}."
+                    f"{payroll.get('next_pay_date', 'the next pay date')}. "
+                    f"Cash after payroll would be {_money(payroll.get('cash_after_payroll'))}, "
+                    "which is too tight."
                 ),
-                "draft": "Chase the largest overdue invoices first and consider delaying non-essential spending until payroll is covered.",
+                "draft": (
+                    "Chase the largest overdue invoices first and consider delaying "
+                    "non-essential spending until payroll is safely covered."
+                ),
             }
         )
 
@@ -141,8 +208,8 @@ def _fallback_actions(report: dict) -> list[dict]:
         raw.append(
             {
                 "title": f"Review spending on {top.get('category', 'rising expenses')}",
-                "reason": f"This category rose by about {top.get('increase_pct', 0)}% recently.",
-                "draft": "Check recent charges in this category and cancel or pause anything that is not essential.",
+                "reason": f"This expense rose by about {top.get('increase_pct', 0)}% compared with the previous 3 months.",
+                "draft": "Check recent charges for this vendor and cancel or pause anything that is not essential.",
             }
         )
 
@@ -155,6 +222,8 @@ def suggest_actions(report: dict) -> list[dict]:
     Tries the AI first. If the AI is missing, fails or returns nonsense,
     falls back to simple rules so the app never crashes in a demo.
     """
+    report = _normalize_report(report)
+
     if ask_llm_json is not None:
         try:
             actions = _clean_actions(ask_llm_json(_build_prompt(report)), source="ai")
@@ -172,7 +241,9 @@ def suggest_actions(report: dict) -> list[dict]:
 
 def build_weekly_brief(report: dict, approved_actions: list[dict], today: date | None = None) -> str:
     """Return the one-page Weekly Cash Brief as markdown."""
+    report = _normalize_report(report)
     today = today or date.today()
+
     lines = [
         f"# Weekly Cash Brief ({today.isoformat()})",
         "",
@@ -202,11 +273,16 @@ def build_weekly_brief(report: dict, approved_actions: list[dict], today: date |
             f"- Next payroll: {_money(payroll.get('amount'))} on {payroll.get('next_pay_date', '?')}"
         )
         shortfall = payroll.get("shortfall", 0) or 0
-        lines.append(
-            f"- Shortfall: {_money(shortfall)}" if shortfall > 0 else "- Cash covers the next payroll"
-        )
+        if shortfall > 0:
+            lines.append(f"- Shortfall: {_money(shortfall)}")
+        elif payroll.get("risky"):
+            lines.append(
+                f"- Cash after payroll: {_money(payroll.get('cash_after_payroll'))} (tight, below 2 months of burn)"
+            )
+        else:
+            lines.append("- Cash covers the next payroll comfortably")
     else:
-        lines.append("- No payroll data")
+        lines.append("- No upcoming payroll found")
     lines.append("")
 
     spikes = report.get("expense_spikes") or []
@@ -241,18 +317,43 @@ def build_weekly_brief(report: dict, approved_actions: list[dict], today: date |
 # Quick test: run `python -m src.agent` from the project root
 # ---------------------------------------------------------------------------
 
+def _load_real_report():
+    """Use Hassan's real CSVs if they exist, otherwise return None."""
+    try:
+        import pandas as pd
+        from src import finance
+
+        data = finance.BASE_DIR / "data"
+        return finance.build_risk_report(
+            finance.load_bank(data / "bank.csv"),
+            finance.load_invoices(data / "invoices.csv"),
+            finance.load_payroll(data / "payroll.csv"),
+            pd.Timestamp("2026-11-20"),
+        )
+    except Exception as error:
+        print(f"[test] Real data not used ({error}). Using the sample report.\n")
+        return None
+
+
 if __name__ == "__main__":
+    # Sample in the same shape that finance.build_risk_report returns
     sample_report = {
-        "cash": 42000.0,
-        "monthly_burn": 18000.0,
-        "runway_months": 2.3,
+        "runway": {"cash": 42000.0, "burn": 18000.0, "runway": 2.33},
         "overdue_invoices": [
-            {"invoice_id": "INV-102", "customer": "Acme Ltd", "amount": 9000, "days_late": 21}
+            {"invoice_id": "INV-102", "customer": "Acme Ltd", "amount": 9000, "days_overdue": 21}
         ],
-        "payroll_risk": {"next_pay_date": "2026-12-01", "amount": 15000, "shortfall": 0},
-        "expense_spikes": [{"category": "Cloud hosting", "increase_pct": 35}],
+        "payroll_risk": {
+            "has_upcoming_payroll": True,
+            "pay_date": "2026-12-01",
+            "payroll_amount": 15000.0,
+            "cash_after_payroll": 27000.0,
+            "risky": True,
+        },
+        "expense_spikes": [{"description": "Cloud hosting", "pct_increase": 35.0}],
     }
-    actions = suggest_actions(sample_report)
-    print(json.dumps(actions, indent=2))
+
+    test_report = _load_real_report() or sample_report
+    actions = suggest_actions(test_report)
+    print(json.dumps(actions, indent=2, default=str))
     print()
-    print(build_weekly_brief(sample_report, actions))
+    print(build_weekly_brief(test_report, actions))
